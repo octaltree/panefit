@@ -1,8 +1,13 @@
 """
 Panefit configuration management.
 
+Configuration priority (highest to lowest):
+1. CLI arguments (--strategy, etc.)
+2. Config file (~/.config/panefit/config.json or platform-specific)
+3. Environment variables (PANEFIT_*)
+4. Default values (zero-config)
+
 Handles loading, saving, and defaults for CLI settings.
-Settings can be overridden by environment variables (for tmux plugin integration).
 """
 
 import json
@@ -10,6 +15,8 @@ import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
+
+import platformdirs
 
 
 @dataclass
@@ -98,10 +105,21 @@ class PanefitConfig:
         return self
 
 
+def get_config_dir() -> Path:
+    """
+    Get platform-specific user config directory.
+
+    Returns:
+        - Linux: ~/.config/panefit (or $XDG_CONFIG_HOME/panefit)
+        - macOS: ~/Library/Application Support/panefit (or ~/.config/panefit if XDG_CONFIG_HOME set)
+        - Windows: C:\\Users\\<user>\\AppData\\Roaming\\panefit
+    """
+    return Path(platformdirs.user_config_dir("panefit", appauthor=False))
+
+
 def get_config_path() -> Path:
     """Get configuration file path."""
-    xdg_config = os.environ.get("XDG_CONFIG_HOME", "~/.config")
-    return Path(xdg_config).expanduser() / "panefit" / "config.json"
+    return get_config_dir() / "config.json"
 
 
 def load_config(path: Optional[Path] = None, apply_env: bool = True) -> PanefitConfig:

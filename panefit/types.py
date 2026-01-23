@@ -5,7 +5,7 @@ Core data structures used throughout the library.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
 from enum import Enum
 
 
@@ -140,3 +140,51 @@ class AnalysisBatch:
 
     def get_relevance(self, id1: str, id2: str) -> Optional[RelevanceResult]:
         return self.relevance_matrix.get((id1, id2)) or self.relevance_matrix.get((id2, id1))
+
+
+class LayoutOperation(Enum):
+    """Operations to transform layout."""
+
+    SWAP = "swap"          # Swap two panes
+    RESIZE = "resize"      # Resize a pane
+    MOVE = "move"          # Move pane to another window
+    JOIN = "join"          # Join pane next to another
+    BREAK = "break"        # Break pane to new window
+
+
+@dataclass
+class LayoutStep:
+    """A single step in layout transformation."""
+
+    operation: LayoutOperation
+    pane_id: str
+    target_id: Optional[str] = None  # For swap/join
+    width: Optional[int] = None
+    height: Optional[int] = None
+    vertical: bool = False  # For join: split direction
+
+    def __str__(self) -> str:
+        if self.operation == LayoutOperation.SWAP:
+            return f"swap {self.pane_id} <-> {self.target_id}"
+        elif self.operation == LayoutOperation.RESIZE:
+            return f"resize {self.pane_id} to {self.width}x{self.height}"
+        elif self.operation == LayoutOperation.JOIN:
+            dir_str = "below" if self.vertical else "right of"
+            return f"join {self.pane_id} {dir_str} {self.target_id}"
+        else:
+            return f"{self.operation.value} {self.pane_id}"
+
+
+@dataclass
+class LayoutPlan:
+    """Plan to transform current layout to target."""
+
+    steps: list[LayoutStep] = field(default_factory=list)
+    target: Optional["WindowLayout"] = None
+
+    @property
+    def step_count(self) -> int:
+        return len(self.steps)
+
+    def __str__(self) -> str:
+        return f"{self.step_count} steps: " + " → ".join(str(s) for s in self.steps)

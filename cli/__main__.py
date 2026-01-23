@@ -2,7 +2,11 @@
 """
 Panefit CLI - Content-aware intelligent pane layout.
 
-Pure computation: receives pane data, returns layout calculation.
+Configuration priority (highest to lowest):
+1. CLI arguments (--strategy, etc.)
+2. Environment variables (PANEFIT_STRATEGY, etc.)
+3. Config file (~/.config/panefit/config.json or platform-specific)
+4. Default values (zero-config: works without any configuration)
 
 Usage:
     panefit calculate [--strategy=<s>] [--json] < input.json
@@ -32,6 +36,7 @@ from panefit import (
     __version__,
     load_config,
     save_config,
+    get_config_dir,
     get_config_path,
     PanefitConfig,
 )
@@ -183,7 +188,10 @@ def cmd_config(args, config: PanefitConfig):
     config_path = get_config_path()
 
     if args.config_action == "path":
-        print(config_path)
+        if args.dir:
+            print(get_config_dir())
+        else:
+            print(config_path)
 
     elif args.config_action == "show":
         print(json.dumps(config.to_dict(), indent=2))
@@ -253,11 +261,17 @@ def main():
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
 
+    # Global options (override config file settings)
+    parser.add_argument(
+        "-s", "--strategy",
+        choices=["balanced", "importance", "entropy", "activity", "related"],
+        help="Layout strategy (overrides config file)"
+    )
+
     subparsers = parser.add_subparsers(dest="command")
 
     # calculate
     p_calc = subparsers.add_parser("calculate", help="Calculate layout from JSON input")
-    p_calc.add_argument("-s", "--strategy", help="Layout strategy")
     p_calc.add_argument("--llm", action="store_true", help="Use LLM analysis")
     p_calc.add_argument("-c", "--compact", action="store_true", help="Compact JSON output")
 
@@ -272,6 +286,7 @@ def main():
     p_config.add_argument("--key", help="Config key (e.g., llm.enabled)")
     p_config.add_argument("--value", help="Config value")
     p_config.add_argument("--force", action="store_true", help="Force overwrite")
+    p_config.add_argument("--dir", action="store_true", help="Show config directory (with 'path')")
 
     args = parser.parse_args()
 

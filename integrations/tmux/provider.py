@@ -9,7 +9,14 @@ import re
 from typing import Optional
 
 from panefit.providers.base import Provider
-from panefit.types import PaneData, WindowLayout
+from panefit.types import (
+    PaneData,
+    WindowLayout,
+    PaneLayout,
+    LayoutPlan,
+    LayoutStep,
+    LayoutOperation,
+)
 
 
 class TmuxProvider(Provider):
@@ -107,17 +114,102 @@ class TmuxProvider(Provider):
         return int(width), int(height)
 
     def apply_layout(self, layout: WindowLayout, window_id: Optional[str] = None) -> bool:
-        """Apply layout using tmux custom layout string."""
+        """
+        Apply layout using swap operations and resizing.
+
+        1. Calculate swap operations to reorder panes by importance
+        2. Apply swaps to move panes to ideal positions
+        3. Resize panes to target sizes
+        """
         try:
-            layout_str = self._build_layout_string(layout)
-            args = ["select-layout"]
-            if window_id:
-                args.extend(["-t", window_id])
-            args.append(layout_str)
-            self._run_tmux(*args)
-            return True
+            # Plan the transformation
+            plan = self.plan_layout(layout, window_id)
+
+            # Execute the plan
+            return self.execute_plan(plan)
         except Exception:
             return False
+
+    def plan_layout(self, layout: WindowLayout, window_id: Optional[str] = None) -> LayoutPlan:
+        """
+        Plan the operations needed to transform current layout to target.
+
+        Algorithm:
+        1. Get current pane positions (sorted by position in tree)
+        2. Sort target panes by their calculated positions (importance order)
+        3. Match positions: pane at position[i] should go to target position[i]
+        4. Generate swaps to achieve the target ordering
+        """
+        plan = LayoutPlan(target=layout)
+
+        # Get current panes with their positions
+        current_panes = self.get_panes(window_id)
+        if not current_panes:
+            return plan
+
+        # Sort current panes by position (top-left to bottom-right)
+        # This represents the order in tmux's binary tree
+        current_sorted = sorted(current_panes, key=lambda p: (p.y, p.x))
+        current_order = [p.id for p in current_sorted]
+
+        # Sort target panes by position (top-left to bottom-right)
+        # Larger/more important panes should be at top-left
+        target_sorted = sorted(layout.panes, key=lambda p: (p.y, p.x))
+        target_order = [p.id for p in target_sorted]
+
+        # Calculate swaps needed to transform current_order -> target_order
+        # Use a simple algorithm: for each position, if wrong pane is there, swap it
+        working_order = current_order.copy()
+
+        for i, target_id in enumerate(target_order):
+            if i >= len(working_order):
+                break
+
+            current_id = working_order[i]
+            if current_id != target_id:
+                # Find where target_id currently is
+                try:
+                    j = working_order.index(target_id)
+                    # Swap positions i and j
+                    working_order[i], working_order[j] = working_order[j], working_order[i]
+
+                    plan.steps.append(LayoutStep(
+                        operation=LayoutOperation.SWAP,
+                        pane_id=current_id,
+                        target_id=target_id
+                    ))
+                except ValueError:
+                    # target_id not in current window, skip
+                    continue
+
+        # Add resize steps for all panes
+        for pane_layout in layout.panes:
+            plan.steps.append(LayoutStep(
+                operation=LayoutOperation.RESIZE,
+                pane_id=pane_layout.id,
+                width=pane_layout.width,
+                height=pane_layout.height
+            ))
+
+        return plan
+
+    def execute_plan(self, plan: LayoutPlan) -> bool:
+        """Execute a layout transformation plan."""
+        success = True
+        for step in plan.steps:
+            if step.operation == LayoutOperation.SWAP:
+                if not self.swap_panes(step.pane_id, step.target_id):
+                    success = False
+            elif step.operation == LayoutOperation.RESIZE:
+                if not self.resize_pane(step.pane_id, step.width, step.height):
+                    success = False
+            elif step.operation == LayoutOperation.JOIN:
+                direction = "-v" if step.vertical else "-h"
+                try:
+                    self._run_tmux("join-pane", direction, "-s", step.pane_id, "-t", step.target_id)
+                except Exception:
+                    success = False
+        return success
 
     def _build_layout_string(self, layout: WindowLayout) -> str:
         """

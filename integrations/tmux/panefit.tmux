@@ -15,7 +15,7 @@ CURRENT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SCRIPTS_DIR="$CURRENT_DIR/scripts"
 
 # Default options
-default_key="R"
+default_key="F"
 default_auto_reflow="false"
 
 # Get tmux option or default
@@ -31,11 +31,17 @@ get_tmux_option() {
     fi
 }
 
-# Set up key binding
+# Set up key bindings
 setup_keybinding() {
     local key
     key=$(get_tmux_option "@panefit-key" "$default_key")
+
+    # Current window reflow
     tmux bind-key "$key" run-shell "$SCRIPTS_DIR/panefit.sh reflow"
+    tmux bind-key "G" run-shell "$SCRIPTS_DIR/panefit.sh dry-run"
+
+    # Cross-window session commands
+    tmux bind-key "A" run-shell "$SCRIPTS_DIR/panefit.sh session-analyze"
 }
 
 # Set up auto-reflow hook (optional)

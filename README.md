@@ -113,6 +113,82 @@ panefit reflow --llm
 
 Supports OpenAI, Anthropic, and local Ollama.
 
+## Configuration
+
+Works without any config (zero-config). Optionally customize via config file.
+
+**Priority** (highest to lowest):
+1. CLI arguments (`--strategy`)
+2. Environment variables (`PANEFIT_STRATEGY`)
+3. Config file
+4. Defaults
+
+### Config File Location
+
+```
+Linux:   ~/.config/panefit/config.json
+macOS:   ~/Library/Application Support/panefit/config.json
+Windows: %APPDATA%\panefit\config.json
+```
+
+```bash
+panefit config path       # Show config file path
+panefit config path --dir # Show config directory
+panefit config init       # Create default config
+panefit config show       # Show current settings
+```
+
+### Config Schema
+
+```json
+{
+  "layout": {
+    "strategy": "balanced",
+    "layout_type": "auto",
+    "min_width": 20,
+    "min_height": 5
+  },
+  "llm": {
+    "enabled": false,
+    "provider": "auto",
+    "blend_ratio": 0.4,
+    "ollama_model": "llama3.2",
+    "ollama_host": "http://localhost:11434",
+    "openai_model": "gpt-4o-mini",
+    "anthropic_model": "claude-3-haiku-20240307"
+  },
+  "session": {
+    "enabled": true,
+    "relevance_threshold": 0.3,
+    "importance_threshold": 0.2,
+    "auto_park": false,
+    "park_window_name": "parked"
+  }
+}
+```
+
+| Section | Key | Values | Description |
+|---------|-----|--------|-------------|
+| `layout` | `strategy` | `balanced`, `importance`, `entropy`, `activity`, `related` | Layout algorithm |
+| | `layout_type` | `auto`, `horizontal`, `vertical`, `tiled` | Pane arrangement |
+| | `min_width` | int | Minimum pane width |
+| | `min_height` | int | Minimum pane height |
+| `llm` | `enabled` | bool | Enable LLM analysis |
+| | `provider` | `auto`, `openai`, `anthropic`, `ollama` | LLM provider |
+| | `blend_ratio` | 0.0-1.0 | LLM weight when blending scores |
+| `session` | `enabled` | bool | Enable cross-window operations |
+| | `relevance_threshold` | 0.0-1.0 | Min relevance to group panes |
+| | `importance_threshold` | 0.0-1.0 | Below this = candidate for parking |
+
+### Environment Variables
+
+```bash
+PANEFIT_STRATEGY=importance
+PANEFIT_LAYOUT_TYPE=tiled
+PANEFIT_LLM_ENABLED=true
+PANEFIT_LLM_PROVIDER=ollama
+```
+
 ## Requirements
 
 - Python 3.8+

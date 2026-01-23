@@ -55,6 +55,9 @@ from .types import (
     AnalysisBatch,
     LayoutStrategy,
     LayoutType,
+    LayoutOperation,
+    LayoutStep,
+    LayoutPlan,
 )
 
 # Core classes
@@ -70,6 +73,7 @@ from .config import (
     SessionConfig,
     load_config,
     save_config,
+    get_config_dir,
     get_config_path,
 )
 
@@ -93,6 +97,9 @@ __all__ = [
     "AnalysisBatch",
     "LayoutStrategy",
     "LayoutType",
+    "LayoutOperation",
+    "LayoutStep",
+    "LayoutPlan",
 
     # Core
     "Analyzer",
@@ -106,6 +113,7 @@ __all__ = [
     "SessionConfig",
     "load_config",
     "save_config",
+    "get_config_dir",
     "get_config_path",
 
     # Submodules

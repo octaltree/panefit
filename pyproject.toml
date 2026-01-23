@@ -38,7 +38,10 @@ classifiers = [
     "Topic :: Utilities",
 ]
 
-# No required dependencies - core works with stdlib only
+# Minimal required dependencies
+dependencies = [
+    "platformdirs>=3.0.0",  # Cross-platform config directory support
+]
 
 [project.optional-dependencies]
 llm = [
