@@ -11,14 +11,14 @@ import os
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from panefit import Analyzer, LayoutCalculator, SessionOptimizer, load_config, LayoutOperation
+from panefit import Analyzer, LayoutCalculator, load_config, LayoutOperation, SessionOptimizer
 from panefit.llm import LLMManager
 from integrations.tmux import TmuxProvider
 
 
 def reflow(dry_run: bool = False, strategy: str = None) -> dict:
     """
-    Analyze and reflow tmux panes.
+    Analyze and reflow tmux panes in current window.
 
     Args:
         dry_run: If True, calculate but don't apply.
@@ -32,42 +32,16 @@ def reflow(dry_run: bool = False, strategy: str = None) -> dict:
     if not provider.is_available():
         return {"error": "Not in tmux session"}
 
+    config = load_config()
     panes = provider.get_panes()
     if len(panes) < 2:
-        return {"status": "skipped", "message": "Need at least 2 panes"}
+        return {"status": "skipped", "message": "Need 2+ panes"}
 
-    # Load config
-    config = load_config()
-
-    # Get before sizes
+    # Analyze and calculate
     before = {p.id: (p.width, p.height) for p in panes}
-
-    # Analyze
     analyzer = Analyzer()
     analyses = analyzer.analyze_panes(panes)
 
-    # LLM enhancement if enabled
-    if config.llm.enabled:
-        llm = LLMManager(
-            gemini_key=config.llm.gemini_api_key if hasattr(config.llm, 'gemini_api_key') else None,
-            preferred_provider=config.llm.provider if config.llm.provider != "auto" else None,
-        )
-        if llm.is_available():
-            blend = config.llm.blend_ratio
-            for pane in panes:
-                llm_result = llm.analyze_content(pane.content)
-                if llm_result:
-                    analysis = analyses[pane.id]
-                    analysis.importance_score = (
-                        (1 - blend) * analysis.importance_score +
-                        blend * llm_result.importance_score
-                    )
-                    analysis.interestingness_score = (
-                        (1 - blend) * analysis.interestingness_score +
-                        blend * llm_result.interestingness_score
-                    )
-
-    # Calculate layout
     width, height = provider.get_window_size()
     calc = LayoutCalculator(
         strategy=strategy or config.layout.strategy,
@@ -76,46 +50,27 @@ def reflow(dry_run: bool = False, strategy: str = None) -> dict:
     )
     layout = calc.calculate(panes, analyses, width, height)
 
-    # Get after sizes and positions
-    after = {}
-    for pane_layout in layout.panes:
-        after[pane_layout.id] = {
-            "width": pane_layout.width,
-            "height": pane_layout.height,
-            "x": pane_layout.x,
-            "y": pane_layout.y,
-        }
-
-    # Plan the transformation
+    # Plan and execute
     plan = provider.plan_layout(layout)
 
-    result = {
-        "status": "dry_run" if dry_run else "applied",
-        "panes": [],
-        "operations": [],
-    }
-
-    for pane in panes:
-        pane_info = {
-            "id": pane.id,
-            "before": f"{before[pane.id][0]}x{before[pane.id][1]}",
-            "after": f"{after[pane.id]['width']}x{after[pane.id]['height']}@({after[pane.id]['x']},{after[pane.id]['y']})",
-            "importance": round(analyses[pane.id].importance_score, 3),
-        }
-        result["panes"].append(pane_info)
-
-    # Include operations in result
-    for step in plan.steps:
-        if step.operation == LayoutOperation.SWAP:
-            result["operations"].append(f"swap({step.pane_id},{step.target_id})")
-        elif step.operation == LayoutOperation.RESIZE:
-            result["operations"].append(f"resize({step.pane_id},{step.width}x{step.height})")
-
-    # Apply if not dry run
     if not dry_run:
         provider.execute_plan(plan)
 
-    return result
+    # Collect results
+    results = []
+    for pane in panes:
+        pane_layout = layout.get_pane(pane.id)
+        if pane_layout:
+            results.append({
+                "id": pane.id,
+                "before": f"{before[pane.id][0]}x{before[pane.id][1]}",
+                "after": f"{pane_layout.width}x{pane_layout.height}@({pane_layout.x},{pane_layout.y})",
+            })
+
+    return {
+        "status": "dry_run" if dry_run else "applied",
+        "panes": results,
+    }
 
 
 def session_analyze() -> dict:
@@ -191,16 +146,11 @@ def format_result(result: dict, command: str = "reflow") -> str:
         return f"{prefix}{len(moves)} moves proposed"
 
     # reflow/dry-run
-    ops = result.get("operations", [])
-    swap_count = len([o for o in ops if o.startswith("swap")])
-
-    parts = []
-    for p in result.get("panes", []):
-        parts.append(f"{p['id']}: {p['before']} -> {p['after']}")
-
+    panes = result.get("panes", [])
     prefix = "[dry-run] " if result.get("status") == "dry_run" else ""
-    op_info = f" ({swap_count} swaps)" if swap_count > 0 else ""
-    return f"{prefix}{' | '.join(parts)}{op_info}"
+
+    parts = [f"{p['id']}: {p['before']} -> {p['after']}" for p in panes]
+    return f"{prefix}{' | '.join(parts)}" if parts else f"{prefix}No changes"
 
 
 def main():

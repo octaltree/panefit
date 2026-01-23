@@ -70,8 +70,7 @@ class LayoutCalculator:
             else:
                 importance = interestingness = activity = 0.5
 
-            if pane.active:
-                importance = min(1.0, importance + 0.2)
+            # Note: active pane boost is already applied in analyzer.analyze_pane()
 
             # Calculate combined based on strategy
             if self.strategy == LayoutStrategy.IMPORTANCE:
@@ -100,6 +99,30 @@ class LayoutCalculator:
                 score.combined /= total
 
         return scores
+
+    def _detect_orientation(self, panes: list[PaneData]) -> str:
+        """
+        Detect current layout orientation from pane positions.
+
+        Returns:
+            'vertical' if panes are stacked (same x, different y)
+            'horizontal' if panes are side-by-side (same y, different x)
+            'tiled' for mixed layouts
+        """
+        if len(panes) <= 1:
+            return "horizontal"
+
+        xs = set(p.x for p in panes)
+        ys = set(p.y for p in panes)
+
+        # All panes have same x -> vertical (stacked)
+        if len(xs) == 1:
+            return "vertical"
+        # All panes have same y -> horizontal (side-by-side)
+        if len(ys) == 1:
+            return "horizontal"
+        # Mixed
+        return "tiled"
 
     def _proportional_sizes(
         self,
@@ -283,13 +306,12 @@ class LayoutCalculator:
         elif self.strategy == LayoutStrategy.RELATED and relevance_matrix:
             layouts = self._layout_related(scores, relevance_matrix, window_width, window_height)
         else:
-            # Auto: choose based on aspect ratio
-            aspect = window_width / window_height
-            if len(panes) == 2:
-                if aspect > 1.5:
-                    layouts = self._layout_horizontal(scores, window_width, window_height)
-                else:
-                    layouts = self._layout_vertical(scores, window_width, window_height)
+            # Auto: detect current orientation from pane positions
+            current_orientation = self._detect_orientation(panes)
+            if current_orientation == "vertical":
+                layouts = self._layout_vertical(scores, window_width, window_height)
+            elif current_orientation == "horizontal":
+                layouts = self._layout_horizontal(scores, window_width, window_height)
             else:
                 layouts = self._layout_tiled(scores, window_width, window_height)
 

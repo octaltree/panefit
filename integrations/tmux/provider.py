@@ -196,19 +196,40 @@ class TmuxProvider(Provider):
     def execute_plan(self, plan: LayoutPlan) -> bool:
         """Execute a layout transformation plan."""
         success = True
+
+        # Execute swaps first
         for step in plan.steps:
             if step.operation == LayoutOperation.SWAP:
                 if not self.swap_panes(step.pane_id, step.target_id):
                     success = False
-            elif step.operation == LayoutOperation.RESIZE:
-                if not self.resize_pane(step.pane_id, step.width, step.height):
+
+        # Get current pane dimensions after swaps
+        current_panes = {p.id: p for p in self.get_panes()}
+
+        # Execute resizes (sorted by y desc to resize from bottom up)
+        resize_steps = [s for s in plan.steps if s.operation == LayoutOperation.RESIZE]
+        # Sort by target y position descending (bottom first)
+        target_positions = {p.id: p.y for p in plan.target.panes}
+        resize_steps.sort(key=lambda s: target_positions.get(s.pane_id, 0), reverse=True)
+
+        for step in resize_steps:
+            current = current_panes.get(step.pane_id)
+            # Only resize if dimension actually changed
+            new_width = step.width if current and step.width != current.width else None
+            new_height = step.height if current and step.height != current.height else None
+            if new_width or new_height:
+                if not self.resize_pane(step.pane_id, new_width, new_height):
                     success = False
-            elif step.operation == LayoutOperation.JOIN:
+
+        # Handle joins
+        for step in plan.steps:
+            if step.operation == LayoutOperation.JOIN:
                 direction = "-v" if step.vertical else "-h"
                 try:
                     self._run_tmux("join-pane", direction, "-s", step.pane_id, "-t", step.target_id)
                 except Exception:
                     success = False
+
         return success
 
     def _build_layout_string(self, layout: WindowLayout) -> str:
