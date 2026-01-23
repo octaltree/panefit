@@ -1,0 +1,15 @@
+# Panefit - Content-aware intelligent pane layout for tmux
+#
+# Core dependencies (none required for basic functionality)
+#
+
+# Optional: LLM providers for enhanced analysis
+# Uncomment the providers you want to use:
+
+# OpenAI (GPT-4, etc.)
+# openai>=1.0.0
+
+# Anthropic (Claude)
+# anthropic>=0.18.0
+
+# Note: Ollama uses HTTP API and doesn't require a Python package

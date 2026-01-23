@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "panefit"
+version = "0.1.0"
+description = "Content-aware intelligent pane layout engine"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8"
+authors = [
+    { name = "Panefit Contributors" }
+]
+keywords = [
+    "tmux",
+    "terminal",
+    "layout",
+    "pane",
+    "multiplexer",
+    "entropy",
+    "mcp",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Terminals :: Terminal Emulators/X Terminals",
+    "Topic :: Utilities",
+]
+
+# No required dependencies - core works with stdlib only
+
+[project.optional-dependencies]
+llm = [
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+]
+openai = ["openai>=1.0.0"]
+anthropic = ["anthropic>=0.18.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+all = [
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+]
+
+[project.scripts]
+panefit = "cli.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/username/panefit"
+Documentation = "https://github.com/username/panefit#readme"
+Repository = "https://github.com/username/panefit"
+Issues = "https://github.com/username/panefit/issues"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/panefit",
+    "/cli",
+    "/integrations",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["panefit", "cli"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=panefit --cov-report=term-missing"

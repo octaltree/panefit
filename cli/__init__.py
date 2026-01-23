@@ -1,0 +1,1 @@
+"""Panefit CLI application."""
