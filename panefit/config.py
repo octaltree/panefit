@@ -1,7 +1,8 @@
 """
 Panefit configuration management.
 
-Handles loading, saving, and defaults for CLI/plugin settings.
+Handles loading, saving, and defaults for CLI settings.
+Settings can be overridden by environment variables (for tmux plugin integration).
 """
 
 import json
@@ -16,7 +17,9 @@ class LLMConfig:
     """LLM integration settings."""
 
     enabled: bool = False
-    provider: str = "auto"  # auto, openai, anthropic, ollama
+    provider: str = "auto"  # auto, gemini, openai, anthropic, ollama
+    gemini_api_key: str = ""  # Gemini API key
+    gemini_model: str = "gemini-2.0-flash"  # Free tier model
     openai_model: str = "gpt-4o-mini"
     anthropic_model: str = "claude-3-haiku-20240307"
     ollama_model: str = "llama3.2"
@@ -46,22 +49,12 @@ class SessionConfig:
 
 
 @dataclass
-class TmuxConfig:
-    """tmux plugin settings."""
-
-    keybinding: str = "R"
-    auto_reflow: bool = False
-    history_lines: int = 100
-
-
-@dataclass
 class PanefitConfig:
     """Main configuration container."""
 
     llm: LLMConfig = field(default_factory=LLMConfig)
     layout: LayoutConfig = field(default_factory=LayoutConfig)
     session: SessionConfig = field(default_factory=SessionConfig)
-    tmux: TmuxConfig = field(default_factory=TmuxConfig)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -69,7 +62,6 @@ class PanefitConfig:
             "llm": asdict(self.llm),
             "layout": asdict(self.layout),
             "session": asdict(self.session),
-            "tmux": asdict(self.tmux),
         }
 
     @classmethod
@@ -79,8 +71,31 @@ class PanefitConfig:
             llm=LLMConfig(**data.get("llm", {})),
             layout=LayoutConfig(**data.get("layout", {})),
             session=SessionConfig(**data.get("session", {})),
-            tmux=TmuxConfig(**data.get("tmux", {})),
         )
+
+    def apply_env_overrides(self) -> "PanefitConfig":
+        """
+        Apply environment variable overrides.
+
+        Environment variables (set by tmux plugin or shell):
+            PANEFIT_LLM_ENABLED - true/false
+            PANEFIT_LLM_PROVIDER - auto/openai/anthropic/ollama
+            PANEFIT_STRATEGY - balanced/importance/entropy/activity
+            PANEFIT_LAYOUT_TYPE - auto/horizontal/vertical/tiled
+        """
+        # LLM overrides
+        if os.environ.get("PANEFIT_LLM_ENABLED"):
+            self.llm.enabled = os.environ["PANEFIT_LLM_ENABLED"].lower() == "true"
+        if os.environ.get("PANEFIT_LLM_PROVIDER"):
+            self.llm.provider = os.environ["PANEFIT_LLM_PROVIDER"]
+
+        # Layout overrides
+        if os.environ.get("PANEFIT_STRATEGY"):
+            self.layout.strategy = os.environ["PANEFIT_STRATEGY"]
+        if os.environ.get("PANEFIT_LAYOUT_TYPE"):
+            self.layout.layout_type = os.environ["PANEFIT_LAYOUT_TYPE"]
+
+        return self
 
 
 def get_config_path() -> Path:
@@ -89,27 +104,32 @@ def get_config_path() -> Path:
     return Path(xdg_config).expanduser() / "panefit" / "config.json"
 
 
-def load_config(path: Optional[Path] = None) -> PanefitConfig:
+def load_config(path: Optional[Path] = None, apply_env: bool = True) -> PanefitConfig:
     """
     Load configuration from file.
 
     Args:
         path: Config file path. Uses default if None.
+        apply_env: Apply environment variable overrides.
 
     Returns:
         PanefitConfig with loaded or default values.
     """
     config_path = path or get_config_path()
+    config = PanefitConfig()
 
     if config_path.exists():
         try:
             with open(config_path) as f:
                 data = json.load(f)
-            return PanefitConfig.from_dict(data)
+            config = PanefitConfig.from_dict(data)
         except (json.JSONDecodeError, TypeError, KeyError):
             pass
 
-    return PanefitConfig()
+    if apply_env:
+        config.apply_env_overrides()
+
+    return config
 
 
 def save_config(config: PanefitConfig, path: Optional[Path] = None) -> bool:

@@ -8,8 +8,8 @@ import subprocess
 import re
 from typing import Optional
 
-from .base import Provider
-from ..types import PaneData, WindowLayout
+from panefit.providers.base import Provider
+from panefit.types import PaneData, WindowLayout
 
 
 class TmuxProvider(Provider):
@@ -107,17 +107,68 @@ class TmuxProvider(Provider):
         return int(width), int(height)
 
     def apply_layout(self, layout: WindowLayout, window_id: Optional[str] = None) -> bool:
-        """Apply layout by resizing panes."""
+        """Apply layout using tmux custom layout string."""
         try:
-            for pane_layout in layout.panes:
-                self.resize_pane(
-                    pane_layout.id,
-                    pane_layout.width,
-                    pane_layout.height
-                )
+            layout_str = self._build_layout_string(layout)
+            args = ["select-layout"]
+            if window_id:
+                args.extend(["-t", window_id])
+            args.append(layout_str)
+            self._run_tmux(*args)
             return True
         except Exception:
             return False
+
+    def _build_layout_string(self, layout: WindowLayout) -> str:
+        """
+        Build tmux layout string from WindowLayout.
+
+        tmux layout format: {width}x{height},{x},{y}[,pane_id | {nested}]
+        """
+        w, h = layout.window_width, layout.window_height
+
+        if len(layout.panes) == 0:
+            return f"{w}x{h},0,0"
+
+        if len(layout.panes) == 1:
+            p = layout.panes[0]
+            pane_num = p.id.replace("%", "")
+            return f"{w}x{h},0,0,{pane_num}"
+
+        # Build nested layout structure
+        pane_strs = []
+        for p in layout.panes:
+            pane_num = p.id.replace("%", "")
+            pane_strs.append(f"{p.width}x{p.height},{p.x},{p.y},{pane_num}")
+
+        # Determine layout orientation based on pane positions
+        # Check if horizontal (side by side) or vertical (stacked)
+        xs = [p.x for p in layout.panes]
+        ys = [p.y for p in layout.panes]
+
+        if len(set(ys)) == 1:
+            # All same y = horizontal layout
+            inner = ",".join(pane_strs)
+            return f"{w}x{h},0,0{{{inner}}}"
+        elif len(set(xs)) == 1:
+            # All same x = vertical layout
+            inner = ",".join(pane_strs)
+            return f"{w}x{h},0,0{{{inner}}}"
+        else:
+            # Mixed/tiled layout - use checksum format
+            checksum = self._calculate_layout_checksum(pane_strs)
+            inner = ",".join(pane_strs)
+            return f"{checksum},{w}x{h},0,0{{{inner}}}"
+
+    def _calculate_layout_checksum(self, pane_strs: list[str]) -> str:
+        """Calculate tmux layout checksum."""
+        layout_str = ",".join(pane_strs)
+        csum = 0
+        for c in layout_str:
+            csum = (csum >> 1) + ((csum & 1) << 15)
+            csum += ord(c)
+            csum &= 0xffff
+        return f"{csum:04x}"
 
     def resize_pane(
         self,

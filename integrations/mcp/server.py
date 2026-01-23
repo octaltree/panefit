@@ -13,7 +13,8 @@ from panefit import (
     Analyzer, LayoutCalculator, PaneData,
     LayoutStrategy, LayoutType
 )
-from panefit.providers import TmuxProvider, GenericProvider
+from panefit.providers import GenericProvider
+from integrations.tmux import TmuxProvider
 
 
 class PanefitMCPServer:

@@ -23,11 +23,14 @@ Basic Usage:
     calc = LayoutCalculator(strategy="balanced")
     layout = calc.calculate(panes, results, window_width=200, window_height=50)
 
-With Provider:
+With Provider (e.g., tmux integration):
     from panefit import Analyzer, LayoutCalculator
-    from panefit.providers import TmuxProvider
+    from panefit.providers import Provider  # Abstract interface
 
-    provider = TmuxProvider()
+    # Terminal-specific providers are in integrations/
+    # e.g., from integrations.tmux import TmuxProvider
+
+    provider: Provider = ...  # Get from integration
     panes = provider.get_panes()
     width, height = provider.get_window_size()
 
@@ -69,6 +72,9 @@ from .config import (
     save_config,
     get_config_path,
 )
+
+# Note: tmux/MCP specific config is managed by their respective integrations,
+# not by this library. They can override settings via environment variables.
 
 # Providers (optional import to avoid circular dependencies)
 from . import providers

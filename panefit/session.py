@@ -10,7 +10,7 @@ from typing import Optional
 
 from .types import PaneData, AnalysisResult, RelevanceResult
 from .analyzer import Analyzer
-from .providers.tmux import TmuxProvider
+from .providers.base import Provider
 
 
 @dataclass
@@ -34,17 +34,19 @@ class SessionLayout:
 
 class SessionOptimizer:
     """
-    Optimizes pane arrangement across tmux session.
+    Optimizes pane arrangement across terminal session.
 
     Features:
     - Groups related panes into same window
     - Moves low-importance panes to "parking" window
     - Consolidates scattered context
+
+    Note: Requires a provider with cross-window support (e.g., TmuxProvider).
     """
 
     def __init__(
         self,
-        provider: Optional[TmuxProvider] = None,
+        provider: Provider,
         analyzer: Optional[Analyzer] = None,
         relevance_threshold: float = 0.3,
         importance_threshold: float = 0.2
@@ -53,12 +55,12 @@ class SessionOptimizer:
         Initialize optimizer.
 
         Args:
-            provider: TmuxProvider instance.
+            provider: Provider instance with cross-window support.
             analyzer: Analyzer instance.
             relevance_threshold: Min relevance score to group panes.
             importance_threshold: Panes below this may be parked.
         """
-        self.provider = provider or TmuxProvider()
+        self.provider = provider
         self.analyzer = analyzer or Analyzer()
         self.relevance_threshold = relevance_threshold
         self.importance_threshold = importance_threshold
@@ -71,7 +73,7 @@ class SessionOptimizer:
             Dict with panes, analyses, relevance matrix, and grouping suggestions.
         """
         if not self.provider.is_available():
-            return {"error": "Not in tmux session"}
+            return {"error": "Provider not available"}
 
         # Get all panes across all windows
         all_panes = self.provider.get_all_panes()

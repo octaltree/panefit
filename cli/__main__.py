@@ -2,14 +2,23 @@
 """
 Panefit CLI - Content-aware intelligent pane layout.
 
+Pure computation: receives pane data, returns layout calculation.
+
 Usage:
-    panefit reflow [--strategy=<s>] [--dry-run] [--json]
-    panefit analyze [--json]
-    panefit session [analyze|optimize|consolidate|park] [options]
-    panefit mcp-server [--port=<p>]
+    panefit calculate [--strategy=<s>] [--json] < input.json
+    panefit analyze [--json] < input.json
     panefit config [show|init|path|set]
     panefit --version
     panefit --help
+
+Input format (JSON):
+    {
+        "window": {"width": 200, "height": 50},
+        "panes": [
+            {"id": "1", "content": "...", "width": 80, "height": 24, "active": true},
+            {"id": "2", "content": "...", "width": 80, "height": 24}
+        ]
+    }
 """
 
 import argparse
@@ -19,15 +28,23 @@ import sys
 from panefit import (
     Analyzer,
     LayoutCalculator,
-    SessionOptimizer,
+    PaneData,
     __version__,
     load_config,
     save_config,
     get_config_path,
     PanefitConfig,
 )
-from panefit.providers import TmuxProvider
 from panefit.llm import LLMManager
+
+
+def read_input() -> dict:
+    """Read JSON input from stdin."""
+    try:
+        return json.load(sys.stdin)
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON input: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def get_llm_manager(config: PanefitConfig) -> LLMManager:
@@ -39,247 +56,126 @@ def get_llm_manager(config: PanefitConfig) -> LLMManager:
     )
 
 
-def cmd_reflow(args, config: PanefitConfig):
-    """Reflow panes based on content analysis."""
-    try:
-        provider = TmuxProvider(history_lines=config.tmux.history_lines)
-        if not provider.is_available():
-            print("Error: Not in a tmux session", file=sys.stderr)
-            return 1
+def input_to_panes(data: dict) -> list[PaneData]:
+    """Convert input JSON to PaneData list."""
+    panes = []
+    for p in data.get("panes", []):
+        panes.append(PaneData(
+            id=str(p.get("id", "")),
+            content=p.get("content", ""),
+            width=p.get("width", 80),
+            height=p.get("height", 24),
+            x=p.get("x", 0),
+            y=p.get("y", 0),
+            active=p.get("active", False),
+            title=p.get("title", ""),
+            command=p.get("command", ""),
+        ))
+    return panes
 
-        panes = provider.get_panes()
-        if len(panes) < 2:
-            result = {"status": "skipped", "message": "Need at least 2 panes"}
-            if args.json:
-                print(json.dumps(result, indent=2))
-            else:
-                print(f"Skipped: {result['message']}")
-            return 0
 
-        # Analyze
-        analyzer = Analyzer()
-        analyses = analyzer.analyze_panes(panes)
+def cmd_calculate(args, config: PanefitConfig):
+    """Calculate layout from input panes."""
+    data = read_input()
 
-        # LLM enhancement (from config or CLI flag)
-        use_llm = args.llm or config.llm.enabled
-        if use_llm:
-            llm = get_llm_manager(config)
-            if llm.is_available():
-                blend = config.llm.blend_ratio
-                for pane in panes:
-                    llm_result = llm.analyze_content(pane.content)
-                    if llm_result:
-                        analysis = analyses[pane.id]
-                        analysis.importance_score = (
-                            (1 - blend) * analysis.importance_score +
-                            blend * llm_result.importance_score
-                        )
-                        analysis.interestingness_score = (
-                            (1 - blend) * analysis.interestingness_score +
-                            blend * llm_result.interestingness_score
-                        )
+    window = data.get("window", {})
+    window_width = window.get("width", 200)
+    window_height = window.get("height", 50)
 
-        # Calculate layout
-        width, height = provider.get_window_size()
-        strategy = args.strategy or config.layout.strategy
-        calc = LayoutCalculator(
-            strategy=strategy,
-            min_width=config.layout.min_width,
-            min_height=config.layout.min_height,
-        )
-        layout = calc.calculate(panes, analyses, width, height)
-
-        # Apply
-        if not args.dry_run:
-            provider.apply_layout(layout)
-
-        # Output
-        result = {
-            "status": "applied" if not args.dry_run else "calculated",
-            "strategy": strategy,
-            "llm_enabled": use_llm,
-            "window": {"width": width, "height": height},
-            "panes": []
-        }
-
-        for pane in panes:
-            analysis = analyses[pane.id]
-            pane_layout = layout.get_pane(pane.id)
-            result["panes"].append({
-                "id": pane.id,
-                "command": pane.command,
-                "importance": round(analysis.importance_score, 3),
-                "interestingness": round(analysis.interestingness_score, 3),
-                "layout": {
-                    "width": pane_layout.width if pane_layout else pane.width,
-                    "height": pane_layout.height if pane_layout else pane.height,
-                }
-            })
-
-        if args.json:
-            print(json.dumps(result, indent=2))
-        else:
-            print(f"Status: {result['status']} (strategy: {strategy})")
-            for p in result["panes"]:
-                print(f"  {p['id']}: importance={p['importance']:.2f}, "
-                      f"size={p['layout']['width']}x{p['layout']['height']}")
-
-        return 0
-
-    except Exception as e:
-        if args.json:
-            print(json.dumps({"status": "error", "message": str(e)}))
-        else:
-            print(f"Error: {e}", file=sys.stderr)
+    panes = input_to_panes(data)
+    if not panes:
+        print(json.dumps({"error": "No panes provided"}))
         return 1
+
+    # Analyze
+    analyzer = Analyzer()
+    analyses = analyzer.analyze_panes(panes)
+
+    # LLM enhancement
+    use_llm = args.llm or config.llm.enabled
+    if use_llm:
+        llm = get_llm_manager(config)
+        if llm.is_available():
+            blend = config.llm.blend_ratio
+            for pane in panes:
+                llm_result = llm.analyze_content(pane.content)
+                if llm_result:
+                    analysis = analyses[pane.id]
+                    analysis.importance_score = (
+                        (1 - blend) * analysis.importance_score +
+                        blend * llm_result.importance_score
+                    )
+                    analysis.interestingness_score = (
+                        (1 - blend) * analysis.interestingness_score +
+                        blend * llm_result.interestingness_score
+                    )
+
+    # Calculate layout
+    strategy = args.strategy or config.layout.strategy
+    calc = LayoutCalculator(
+        strategy=strategy,
+        min_width=config.layout.min_width,
+        min_height=config.layout.min_height,
+    )
+    layout = calc.calculate(panes, analyses, window_width, window_height)
+
+    # Output
+    result = {
+        "window": {"width": window_width, "height": window_height},
+        "strategy": strategy,
+        "panes": []
+    }
+
+    for pane in panes:
+        analysis = analyses[pane.id]
+        pane_layout = layout.get_pane(pane.id)
+        result["panes"].append({
+            "id": pane.id,
+            "importance": round(analysis.importance_score, 3),
+            "interestingness": round(analysis.interestingness_score, 3),
+            "layout": {
+                "x": pane_layout.x if pane_layout else 0,
+                "y": pane_layout.y if pane_layout else 0,
+                "width": pane_layout.width if pane_layout else pane.width,
+                "height": pane_layout.height if pane_layout else pane.height,
+            }
+        })
+
+    print(json.dumps(result, indent=2 if not args.compact else None))
+    return 0
 
 
 def cmd_analyze(args, config: PanefitConfig):
-    """Analyze panes without changing layout."""
-    try:
-        provider = TmuxProvider(history_lines=config.tmux.history_lines)
-        if not provider.is_available():
-            print("Error: Not in a tmux session", file=sys.stderr)
-            return 1
+    """Analyze panes without calculating layout."""
+    data = read_input()
 
-        panes = provider.get_panes()
-        analyzer = Analyzer()
-        results = analyzer.analyze_panes(panes)
-
-        output = {"panes": []}
-        for pane in panes:
-            analysis = results[pane.id]
-            output["panes"].append({
-                "id": pane.id,
-                "command": pane.command,
-                "active": pane.active,
-                "metrics": {
-                    "importance": round(analysis.importance_score, 3),
-                    "interestingness": round(analysis.interestingness_score, 3),
-                    "char_entropy": round(analysis.char_entropy, 3),
-                    "word_entropy": round(analysis.word_entropy, 3),
-                    "surprisal": round(analysis.surprisal_score, 3),
-                    "activity": round(analysis.recent_activity_score, 3),
-                    "word_count": analysis.word_count,
-                    "line_count": analysis.line_count,
-                }
-            })
-
-        if args.json:
-            print(json.dumps(output, indent=2))
-        else:
-            for p in output["panes"]:
-                print(f"\nPane {p['id']} ({p['command']})")
-                print(f"  Active: {p['active']}")
-                m = p["metrics"]
-                print(f"  Importance: {m['importance']:.3f}")
-                print(f"  Interestingness: {m['interestingness']:.3f}")
-                print(f"  Entropy: {m['char_entropy']:.3f}")
-                print(f"  Activity: {m['activity']:.3f}")
-                print(f"  Words: {m['word_count']}, Lines: {m['line_count']}")
-
-        return 0
-
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+    panes = input_to_panes(data)
+    if not panes:
+        print(json.dumps({"error": "No panes provided"}))
         return 1
 
+    analyzer = Analyzer()
+    results = analyzer.analyze_panes(panes)
 
-def cmd_mcp_server(args, config: PanefitConfig):
-    """Start MCP server."""
-    try:
-        from panefit.integrations.mcp import serve
-        serve(port=args.port)
-        return 0
-    except ImportError:
-        print("MCP server module not found", file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
+    output = {"panes": []}
+    for pane in panes:
+        analysis = results[pane.id]
+        output["panes"].append({
+            "id": pane.id,
+            "metrics": {
+                "importance": round(analysis.importance_score, 3),
+                "interestingness": round(analysis.interestingness_score, 3),
+                "char_entropy": round(analysis.char_entropy, 3),
+                "word_entropy": round(analysis.word_entropy, 3),
+                "surprisal": round(analysis.surprisal_score, 3),
+                "activity": round(analysis.recent_activity_score, 3),
+                "word_count": analysis.word_count,
+                "line_count": analysis.line_count,
+            }
+        })
 
-
-def cmd_session(args, config: PanefitConfig):
-    """Session-wide optimization (cross-window)."""
-    if not config.session.enabled:
-        print("Session optimization is disabled in config", file=sys.stderr)
-        return 1
-
-    try:
-        optimizer = SessionOptimizer(
-            relevance_threshold=config.session.relevance_threshold,
-            importance_threshold=config.session.importance_threshold,
-        )
-        if not optimizer.provider.is_available():
-            print("Error: Not in a tmux session", file=sys.stderr)
-            return 1
-
-        if args.session_action == "analyze":
-            result = optimizer.analyze_session()
-
-        elif args.session_action == "optimize":
-            result = optimizer.optimize(dry_run=args.dry_run)
-
-        elif args.session_action == "consolidate":
-            if not args.pane:
-                print("Error: --pane required for consolidate", file=sys.stderr)
-                return 1
-            result = optimizer.consolidate_related(args.pane, dry_run=args.dry_run)
-
-        elif args.session_action == "park":
-            window_name = args.window_name or config.session.park_window_name
-            result = optimizer.park_inactive(
-                window_name=window_name,
-                dry_run=args.dry_run
-            )
-
-        else:
-            result = optimizer.analyze_session()
-
-        if args.json:
-            print(json.dumps(result, indent=2))
-        else:
-            if "error" in result:
-                print(f"Error: {result['error']}")
-                return 1
-
-            if args.session_action == "analyze":
-                print(f"Session: {result['pane_count']} panes in {result['window_count']} windows")
-                print("\nPanes:")
-                for p in result["panes"]:
-                    print(f"  {p['id']} ({p['command']}): importance={p['importance']:.2f}")
-                print("\nSuggested groups:")
-                for g in result["suggested_groups"]:
-                    print(f"  {g['name']}: {', '.join(g['panes'])} ({g['topic']})")
-
-            elif "proposed_moves" in result:
-                print(f"Status: {result['status']}")
-                print(f"Proposed moves: {result['move_count']}")
-                for move in result.get("proposed_moves", []):
-                    print(f"  {move['pane']}: {move['from']} -> {move['to']}")
-
-            elif "moves" in result:
-                print(f"Status: {result['status']}")
-                print(f"Reference: {result.get('reference_pane', 'N/A')}")
-                print(f"Related: {', '.join(result.get('related_panes', []))}")
-                for move in result.get("moves", []):
-                    status = " (done)" if move.get("success") else ""
-                    print(f"  {move['pane']}: {move['from']} -> {move['to']}{status}")
-
-            elif "to_park" in result:
-                print(f"Status: {result['status']}")
-                print(f"To park: {len(result.get('to_park', []))} panes")
-                for p in result.get("to_park", []):
-                    print(f"  {p['id']} ({p['command']}): importance={p['importance']:.2f}")
-
-        return 0
-
-    except Exception as e:
-        if args.json:
-            print(json.dumps({"error": str(e)}))
-        else:
-            print(f"Error: {e}", file=sys.stderr)
-        return 1
+    print(json.dumps(output, indent=2 if not args.compact else None))
+    return 0
 
 
 def cmd_config(args, config: PanefitConfig):
@@ -308,7 +204,6 @@ def cmd_config(args, config: PanefitConfig):
             print("  panefit config set --key layout.strategy --value importance")
             return 1
 
-        # Parse key path (e.g., "llm.enabled")
         parts = args.key.split(".")
         if len(parts) != 2:
             print("Key must be in format: section.field (e.g., llm.enabled)")
@@ -324,7 +219,6 @@ def cmd_config(args, config: PanefitConfig):
             print(f"Unknown field: {field} in section {section}")
             return 1
 
-        # Parse value
         value = args.value
         if value.lower() == "true":
             value = True
@@ -336,7 +230,7 @@ def cmd_config(args, config: PanefitConfig):
             try:
                 value = float(value)
             except ValueError:
-                pass  # Keep as string
+                pass
 
         data[section][field] = value
         new_config = PanefitConfig.from_dict(data)
@@ -351,41 +245,25 @@ def cmd_config(args, config: PanefitConfig):
 
 def main():
     """CLI entry point."""
-    # Load config first
     config = load_config()
 
     parser = argparse.ArgumentParser(
         prog="panefit",
-        description="Content-aware intelligent pane layout"
+        description="Content-aware intelligent pane layout calculator"
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
 
     subparsers = parser.add_subparsers(dest="command")
 
-    # reflow
-    p_reflow = subparsers.add_parser("reflow", help="Reflow panes based on content")
-    p_reflow.add_argument("-s", "--strategy", help="Layout strategy (overrides config)")
-    p_reflow.add_argument("-n", "--dry-run", action="store_true", help="Don't apply changes")
-    p_reflow.add_argument("-j", "--json", action="store_true", help="JSON output")
-    p_reflow.add_argument("--llm", action="store_true", help="Use LLM analysis (overrides config)")
+    # calculate
+    p_calc = subparsers.add_parser("calculate", help="Calculate layout from JSON input")
+    p_calc.add_argument("-s", "--strategy", help="Layout strategy")
+    p_calc.add_argument("--llm", action="store_true", help="Use LLM analysis")
+    p_calc.add_argument("-c", "--compact", action="store_true", help="Compact JSON output")
 
     # analyze
-    p_analyze = subparsers.add_parser("analyze", help="Analyze panes")
-    p_analyze.add_argument("-j", "--json", action="store_true", help="JSON output")
-
-    # mcp-server
-    p_mcp = subparsers.add_parser("mcp-server", help="Start MCP server")
-    p_mcp.add_argument("-p", "--port", type=int, default=0, help="Port (0 for stdio)")
-
-    # session (cross-window optimization)
-    p_session = subparsers.add_parser("session", help="Cross-window session optimization")
-    p_session.add_argument("session_action", nargs="?", default="analyze",
-                           choices=["analyze", "optimize", "consolidate", "park"],
-                           help="Action: analyze, optimize, consolidate, park")
-    p_session.add_argument("-n", "--dry-run", action="store_true", help="Don't apply changes")
-    p_session.add_argument("-j", "--json", action="store_true", help="JSON output")
-    p_session.add_argument("--pane", help="Reference pane ID (for consolidate)")
-    p_session.add_argument("--window-name", help="Window name (for park)")
+    p_analyze = subparsers.add_parser("analyze", help="Analyze panes from JSON input")
+    p_analyze.add_argument("-c", "--compact", action="store_true", help="Compact JSON output")
 
     # config
     p_config = subparsers.add_parser("config", help="Configuration management")
@@ -397,14 +275,10 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "reflow":
-        return cmd_reflow(args, config)
+    if args.command == "calculate":
+        return cmd_calculate(args, config)
     elif args.command == "analyze":
         return cmd_analyze(args, config)
-    elif args.command == "session":
-        return cmd_session(args, config)
-    elif args.command == "mcp-server":
-        return cmd_mcp_server(args, config)
     elif args.command == "config":
         return cmd_config(args, config)
     else:

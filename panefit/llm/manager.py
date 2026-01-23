@@ -12,6 +12,74 @@ import urllib.error
 from .base import LLMProvider, LLMAnalysisResult
 
 
+class GeminiProvider(LLMProvider):
+    """Google Gemini API provider."""
+
+    @property
+    def name(self) -> str:
+        return "gemini"
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gemini-2.0-flash"
+    ):
+        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        self.model = model
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta"
+
+    def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    def analyze_content(self, content: str, context: Optional[str] = None) -> LLMAnalysisResult:
+        prompt = f"""Analyze this terminal content. Return ONLY valid JSON (no markdown):
+{{"importance_score": <0-1 float>, "interestingness_score": <0-1 float>, "summary": "<brief summary>", "topics": ["topic1", "topic2"], "predicted_activity": "<high/medium/low>"}}
+
+Content:
+{content[:3000]}
+"""
+        if context:
+            prompt += f"\nContext: {context}"
+
+        try:
+            url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+            data = json.dumps({
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.3,
+                    "maxOutputTokens": 500,
+                }
+            }).encode()
+
+            req = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"}
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as response:
+                result = json.loads(response.read().decode())
+                text = result["candidates"][0]["content"]["parts"][0]["text"]
+
+                # Extract JSON from response
+                start = text.find("{")
+                end = text.rfind("}") + 1
+                if start >= 0 and end > start:
+                    parsed = json.loads(text[start:end])
+                    return LLMAnalysisResult(
+                        importance_score=float(parsed.get("importance_score", 0.5)),
+                        interestingness_score=float(parsed.get("interestingness_score", 0.5)),
+                        summary=parsed.get("summary", ""),
+                        topics=parsed.get("topics", []),
+                        predicted_activity=parsed.get("predicted_activity", "medium"),
+                        raw_response=text
+                    )
+        except Exception as e:
+            return LLMAnalysisResult(raw_response=str(e))
+
+        return LLMAnalysisResult()
+
+
 class OpenAIProvider(LLMProvider):
     """OpenAI API provider."""
 
@@ -195,12 +263,17 @@ class LLMManager:
 
     def __init__(
         self,
+        gemini_key: Optional[str] = None,
         openai_key: Optional[str] = None,
         anthropic_key: Optional[str] = None,
         ollama_model: Optional[str] = None,
         preferred_provider: Optional[str] = None
     ):
         self.providers: dict[str, LLMProvider] = {}
+
+        # Gemini (free tier available)
+        if gemini_key or os.environ.get("GEMINI_API_KEY"):
+            self.providers["gemini"] = GeminiProvider(api_key=gemini_key)
 
         if openai_key or os.environ.get("OPENAI_API_KEY"):
             self.providers["openai"] = OpenAIProvider(api_key=openai_key)
@@ -224,7 +297,8 @@ class LLMManager:
             if provider.is_available():
                 return provider
 
-        for name in ["anthropic", "openai", "ollama"]:
+        # Priority: gemini (free) > anthropic > openai > ollama
+        for name in ["gemini", "anthropic", "openai", "ollama"]:
             if name in self.providers:
                 provider = self.providers[name]
                 if provider.is_available():

@@ -75,7 +75,7 @@ include = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["panefit", "cli"]
+packages = ["panefit", "cli", "integrations"]
 
 [tool.ruff]
 line-length = 100
