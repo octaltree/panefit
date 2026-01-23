@@ -5,8 +5,9 @@ Panefit CLI - Content-aware intelligent pane layout.
 Usage:
     panefit reflow [--strategy=<s>] [--dry-run] [--json]
     panefit analyze [--json]
+    panefit session [analyze|optimize|consolidate|park] [options]
     panefit mcp-server [--port=<p>]
-    panefit config [show|init|path]
+    panefit config [show|init|path|set]
     panefit --version
     panefit --help
 """
@@ -14,17 +15,34 @@ Usage:
 import argparse
 import json
 import sys
-from typing import Optional
 
-from panefit import Analyzer, LayoutCalculator, SessionOptimizer, __version__
+from panefit import (
+    Analyzer,
+    LayoutCalculator,
+    SessionOptimizer,
+    __version__,
+    load_config,
+    save_config,
+    get_config_path,
+    PanefitConfig,
+)
 from panefit.providers import TmuxProvider
 from panefit.llm import LLMManager
 
 
-def cmd_reflow(args):
+def get_llm_manager(config: PanefitConfig) -> LLMManager:
+    """Create LLMManager from config."""
+    llm_cfg = config.llm
+    return LLMManager(
+        ollama_model=llm_cfg.ollama_model if llm_cfg.provider in ("auto", "ollama") else None,
+        preferred_provider=llm_cfg.provider if llm_cfg.provider != "auto" else None,
+    )
+
+
+def cmd_reflow(args, config: PanefitConfig):
     """Reflow panes based on content analysis."""
     try:
-        provider = TmuxProvider()
+        provider = TmuxProvider(history_lines=config.tmux.history_lines)
         if not provider.is_available():
             print("Error: Not in a tmux session", file=sys.stderr)
             return 1
@@ -42,26 +60,33 @@ def cmd_reflow(args):
         analyzer = Analyzer()
         analyses = analyzer.analyze_panes(panes)
 
-        # LLM enhancement if enabled
-        if args.llm:
-            llm = LLMManager()
+        # LLM enhancement (from config or CLI flag)
+        use_llm = args.llm or config.llm.enabled
+        if use_llm:
+            llm = get_llm_manager(config)
             if llm.is_available():
+                blend = config.llm.blend_ratio
                 for pane in panes:
                     llm_result = llm.analyze_content(pane.content)
                     if llm_result:
                         analysis = analyses[pane.id]
                         analysis.importance_score = (
-                            0.6 * analysis.importance_score +
-                            0.4 * llm_result.importance_score
+                            (1 - blend) * analysis.importance_score +
+                            blend * llm_result.importance_score
                         )
                         analysis.interestingness_score = (
-                            0.6 * analysis.interestingness_score +
-                            0.4 * llm_result.interestingness_score
+                            (1 - blend) * analysis.interestingness_score +
+                            blend * llm_result.interestingness_score
                         )
 
         # Calculate layout
         width, height = provider.get_window_size()
-        calc = LayoutCalculator(strategy=args.strategy or "balanced")
+        strategy = args.strategy or config.layout.strategy
+        calc = LayoutCalculator(
+            strategy=strategy,
+            min_width=config.layout.min_width,
+            min_height=config.layout.min_height,
+        )
         layout = calc.calculate(panes, analyses, width, height)
 
         # Apply
@@ -71,6 +96,8 @@ def cmd_reflow(args):
         # Output
         result = {
             "status": "applied" if not args.dry_run else "calculated",
+            "strategy": strategy,
+            "llm_enabled": use_llm,
             "window": {"width": width, "height": height},
             "panes": []
         }
@@ -92,7 +119,7 @@ def cmd_reflow(args):
         if args.json:
             print(json.dumps(result, indent=2))
         else:
-            print(f"Status: {result['status']}")
+            print(f"Status: {result['status']} (strategy: {strategy})")
             for p in result["panes"]:
                 print(f"  {p['id']}: importance={p['importance']:.2f}, "
                       f"size={p['layout']['width']}x{p['layout']['height']}")
@@ -107,10 +134,10 @@ def cmd_reflow(args):
         return 1
 
 
-def cmd_analyze(args):
+def cmd_analyze(args, config: PanefitConfig):
     """Analyze panes without changing layout."""
     try:
-        provider = TmuxProvider()
+        provider = TmuxProvider(history_lines=config.tmux.history_lines)
         if not provider.is_available():
             print("Error: Not in a tmux session", file=sys.stderr)
             return 1
@@ -158,7 +185,7 @@ def cmd_analyze(args):
         return 1
 
 
-def cmd_mcp_server(args):
+def cmd_mcp_server(args, config: PanefitConfig):
     """Start MCP server."""
     try:
         from panefit.integrations.mcp import serve
@@ -172,10 +199,17 @@ def cmd_mcp_server(args):
         return 1
 
 
-def cmd_session(args):
+def cmd_session(args, config: PanefitConfig):
     """Session-wide optimization (cross-window)."""
+    if not config.session.enabled:
+        print("Session optimization is disabled in config", file=sys.stderr)
+        return 1
+
     try:
-        optimizer = SessionOptimizer()
+        optimizer = SessionOptimizer(
+            relevance_threshold=config.session.relevance_threshold,
+            importance_threshold=config.session.importance_threshold,
+        )
         if not optimizer.provider.is_available():
             print("Error: Not in a tmux session", file=sys.stderr)
             return 1
@@ -193,8 +227,9 @@ def cmd_session(args):
             result = optimizer.consolidate_related(args.pane, dry_run=args.dry_run)
 
         elif args.session_action == "park":
+            window_name = args.window_name or config.session.park_window_name
             result = optimizer.park_inactive(
-                window_name=args.window_name or "parked",
+                window_name=window_name,
                 dry_run=args.dry_run
             )
 
@@ -247,38 +282,78 @@ def cmd_session(args):
         return 1
 
 
-def cmd_config(args):
+def cmd_config(args, config: PanefitConfig):
     """Configuration management."""
-    import os
-    from pathlib import Path
-
-    config_path = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "panefit" / "config.json"
+    config_path = get_config_path()
 
     if args.config_action == "path":
         print(config_path)
+
     elif args.config_action == "show":
-        if config_path.exists():
-            print(config_path.read_text())
-        else:
-            print("{}")
+        print(json.dumps(config.to_dict(), indent=2))
+
     elif args.config_action == "init":
-        if config_path.exists():
+        if config_path.exists() and not args.force:
             print(f"Config already exists: {config_path}")
+            print("Use --force to overwrite")
         else:
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(json.dumps({
-                "llm": {"enabled": False, "provider": "auto"},
-                "layout": {"strategy": "balanced", "min_width": 20, "min_height": 5},
-            }, indent=2))
+            save_config(PanefitConfig(), config_path)
             print(f"Created: {config_path}")
+
+    elif args.config_action == "set":
+        if not args.key or args.value is None:
+            print("Usage: panefit config set --key <key> --value <value>")
+            print("Examples:")
+            print("  panefit config set --key llm.enabled --value true")
+            print("  panefit config set --key layout.strategy --value importance")
+            return 1
+
+        # Parse key path (e.g., "llm.enabled")
+        parts = args.key.split(".")
+        if len(parts) != 2:
+            print("Key must be in format: section.field (e.g., llm.enabled)")
+            return 1
+
+        section, field = parts
+        data = config.to_dict()
+
+        if section not in data:
+            print(f"Unknown section: {section}")
+            return 1
+        if field not in data[section]:
+            print(f"Unknown field: {field} in section {section}")
+            return 1
+
+        # Parse value
+        value = args.value
+        if value.lower() == "true":
+            value = True
+        elif value.lower() == "false":
+            value = False
+        elif value.isdigit():
+            value = int(value)
+        else:
+            try:
+                value = float(value)
+            except ValueError:
+                pass  # Keep as string
+
+        data[section][field] = value
+        new_config = PanefitConfig.from_dict(data)
+        save_config(new_config, config_path)
+        print(f"Set {args.key} = {value}")
+
     else:
-        print("Usage: panefit config [show|init|path]")
+        print("Usage: panefit config [show|init|path|set]")
 
     return 0
 
 
 def main():
     """CLI entry point."""
+    # Load config first
+    config = load_config()
+
     parser = argparse.ArgumentParser(
         prog="panefit",
         description="Content-aware intelligent pane layout"
@@ -289,10 +364,10 @@ def main():
 
     # reflow
     p_reflow = subparsers.add_parser("reflow", help="Reflow panes based on content")
-    p_reflow.add_argument("-s", "--strategy", help="Layout strategy")
+    p_reflow.add_argument("-s", "--strategy", help="Layout strategy (overrides config)")
     p_reflow.add_argument("-n", "--dry-run", action="store_true", help="Don't apply changes")
     p_reflow.add_argument("-j", "--json", action="store_true", help="JSON output")
-    p_reflow.add_argument("--llm", action="store_true", help="Use LLM analysis")
+    p_reflow.add_argument("--llm", action="store_true", help="Use LLM analysis (overrides config)")
 
     # analyze
     p_analyze = subparsers.add_parser("analyze", help="Analyze panes")
@@ -313,22 +388,25 @@ def main():
     p_session.add_argument("--window-name", help="Window name (for park)")
 
     # config
-    p_config = subparsers.add_parser("config", help="Configuration")
+    p_config = subparsers.add_parser("config", help="Configuration management")
     p_config.add_argument("config_action", nargs="?", default="show",
-                          choices=["show", "init", "path"])
+                          choices=["show", "init", "path", "set"])
+    p_config.add_argument("--key", help="Config key (e.g., llm.enabled)")
+    p_config.add_argument("--value", help="Config value")
+    p_config.add_argument("--force", action="store_true", help="Force overwrite")
 
     args = parser.parse_args()
 
     if args.command == "reflow":
-        return cmd_reflow(args)
+        return cmd_reflow(args, config)
     elif args.command == "analyze":
-        return cmd_analyze(args)
+        return cmd_analyze(args, config)
     elif args.command == "session":
-        return cmd_session(args)
+        return cmd_session(args, config)
     elif args.command == "mcp-server":
-        return cmd_mcp_server(args)
+        return cmd_mcp_server(args, config)
     elif args.command == "config":
-        return cmd_config(args)
+        return cmd_config(args, config)
     else:
         parser.print_help()
         return 0

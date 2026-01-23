@@ -59,6 +59,17 @@ from .analyzer import Analyzer
 from .layout import LayoutCalculator
 from .session import SessionOptimizer
 
+# Configuration
+from .config import (
+    PanefitConfig,
+    LLMConfig,
+    LayoutConfig,
+    SessionConfig,
+    load_config,
+    save_config,
+    get_config_path,
+)
+
 # Providers (optional import to avoid circular dependencies)
 from . import providers
 from . import llm
@@ -81,6 +92,15 @@ __all__ = [
     "Analyzer",
     "LayoutCalculator",
     "SessionOptimizer",
+
+    # Configuration
+    "PanefitConfig",
+    "LLMConfig",
+    "LayoutConfig",
+    "SessionConfig",
+    "load_config",
+    "save_config",
+    "get_config_path",
 
     # Submodules
     "providers",

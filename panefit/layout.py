@@ -4,8 +4,10 @@ Panefit layout calculator.
 Calculates optimal pane layouts based on content analysis results.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 from .types import (
     PaneData, AnalysisResult, RelevanceResult,
