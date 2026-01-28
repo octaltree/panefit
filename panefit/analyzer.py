@@ -250,13 +250,7 @@ class Analyzer:
 
     def analyze_pane(self, pane: PaneData) -> AnalysisResult:
         """Analyze a PaneData object."""
-        result = self.analyze(pane.content, pane.id)
-
-        # Boost for active pane
-        if pane.active:
-            result.importance_score = min(1.0, result.importance_score + 0.2)
-
-        return result
+        return self.analyze(pane.content, pane.id)
 
     def analyze_panes(self, panes: list[PaneData]) -> dict[str, AnalysisResult]:
         """
